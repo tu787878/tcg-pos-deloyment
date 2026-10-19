@@ -50,7 +50,10 @@ esac
 case "$API_IMAGE:$WEB_IMAGE" in
     *[!A-Za-z0-9._/:@-]*) printf 'Invalid image name.\n' >&2; exit 1 ;;
 esac
-[ -n "$API_IMAGE" ] && [ -n "$WEB_IMAGE" ] || { usage >&2; exit 1; }
+if [ -z "$API_IMAGE" ] || [ -z "$WEB_IMAGE" ]; then
+    usage >&2
+    exit 1
+fi
 
 ARCH=$(uname -m)
 case "$ARCH" in
