@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deployment-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify deployment bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check POSIX shell scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          shellcheck install.sh update.sh backup.sh restore.sh
+          sh -n install.sh update.sh backup.sh restore.sh
+
+      - name: Render test configuration
+        run: |
+          cp .env.example .env
+          mkdir -p nginx secrets
+          sed 's/__DOMAIN__/restaurant-one.duckdns.org/g' \
+            nginx/bootstrap.conf.template > nginx/default.conf
+
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+
+      - name: Check installer help
+        run: ./install.sh --help

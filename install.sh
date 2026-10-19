@@ -2,7 +2,7 @@
 set -eu
 
 INSTALL_DIR=${TCG_POS_DIR:-/opt/tcg-pos}
-SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SOURCE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 DOMAIN=
 EMAIL=
 VERSION=
@@ -59,6 +59,7 @@ case "$ARCH" in
 esac
 
 if [ -r /etc/os-release ]; then
+    # shellcheck source=/dev/null
     . /etc/os-release
 else
     printf 'Cannot identify the operating system.\n' >&2
@@ -89,7 +90,8 @@ install_docker() {
     curl -fsSL "https://download.docker.com/linux/$DOCKER_DISTRO/gpg" -o /etc/apt/keyrings/docker.asc
     chmod a+r /etc/apt/keyrings/docker.asc
     ARCHITECTURE=$(dpkg --print-architecture)
-    CODENAME=${VERSION_CODENAME:-$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")}
+    CODENAME=${VERSION_CODENAME:-}
+    [ -n "$CODENAME" ] || { printf 'Operating-system codename is unavailable.\n' >&2; exit 1; }
     printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' \
         "$ARCHITECTURE" "$DOCKER_DISTRO" "$CODENAME" > /etc/apt/sources.list.d/docker.list
     apt-get update
