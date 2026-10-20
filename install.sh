@@ -5,18 +5,22 @@ INSTALL_DIR=${TCG_POS_DIR:-/opt/tcg-pos}
 SOURCE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 DOMAIN=
 EMAIL=
-VERSION=
-API_IMAGE=
-WEB_IMAGE=
+VERSION=1.0.0
+API_IMAGE=ghcr.io/tu787878/tcg-pos-api
+WEB_IMAGE=ghcr.io/tu787878/tcg-pos-web
+REGISTRY_USER=shibawannafly
 
 usage() {
     cat <<'EOF'
 Usage: sudo ./install.sh \
   --domain restaurant-one.duckdns.org \
-  --email owner@example.com \
-  --version 1.0.0 \
-  --api-image ghcr.io/organization/tcg-pos-api \
-  --web-image ghcr.io/organization/tcg-pos-web
+  --email owner@example.com
+
+Optional overrides:
+  --version VERSION
+  --api-image IMAGE
+  --web-image IMAGE
+  --registry-user GITHUB_USERNAME
 EOF
 }
 
@@ -27,6 +31,7 @@ while [ "$#" -gt 0 ]; do
         --version) VERSION=${2:-}; shift 2 ;;
         --api-image) API_IMAGE=${2:-}; shift 2 ;;
         --web-image) WEB_IMAGE=${2:-}; shift 2 ;;
+        --registry-user) REGISTRY_USER=${2:-}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
     esac
@@ -49,6 +54,9 @@ case "$VERSION" in
 esac
 case "$API_IMAGE:$WEB_IMAGE" in
     *[!A-Za-z0-9._/:@-]*) printf 'Invalid image name.\n' >&2; exit 1 ;;
+esac
+case "$REGISTRY_USER" in
+    ''|*[!A-Za-z0-9_-]*) printf 'Invalid registry username.\n' >&2; exit 1 ;;
 esac
 if [ -z "$API_IMAGE" ] || [ -z "$WEB_IMAGE" ]; then
     usage >&2
@@ -102,11 +110,40 @@ install_docker() {
     systemctl enable --now docker
 }
 
-if ! command -v docker >/dev/null 2>&1; then
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
     install_docker
 fi
 docker compose version >/dev/null
-command -v openssl >/dev/null 2>&1 || { apt-get update; apt-get install -y openssl; }
+if ! command -v openssl >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y ca-certificates curl openssl
+fi
+
+PUBLIC_IP=$(curl -fsS --max-time 15 https://api.ipify.org) || {
+    printf 'Could not determine the server public IPv4 address.\n' >&2
+    exit 1
+}
+DOMAIN_IPS=$(getent ahostsv4 "$DOMAIN" | awk '{print $1}' | sort -u)
+if ! printf '%s\n' "$DOMAIN_IPS" | grep -Fx "$PUBLIC_IP" >/dev/null 2>&1; then
+    printf 'Domain %s does not resolve to this server (%s).\n' "$DOMAIN" "$PUBLIC_IP" >&2
+    printf 'Resolved IPv4 addresses: %s\n' "${DOMAIN_IPS:-none}" >&2
+    exit 1
+fi
+
+printf 'GHCR token for %s: ' "$REGISTRY_USER"
+trap 'stty echo </dev/tty' EXIT INT TERM
+stty -echo </dev/tty
+IFS= read -r GHCR_TOKEN </dev/tty
+stty echo </dev/tty
+trap - EXIT INT TERM
+printf '\n'
+if [ -z "$GHCR_TOKEN" ]; then
+    printf 'A GHCR token with read:packages access is required.\n' >&2
+    exit 1
+fi
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io \
+    --username "$REGISTRY_USER" --password-stdin
+unset GHCR_TOKEN
 
 mkdir -p "$INSTALL_DIR/nginx" "$INSTALL_DIR/secrets" "$INSTALL_DIR/backups"
 chmod 700 "$INSTALL_DIR" "$INSTALL_DIR/secrets" "$INSTALL_DIR/backups"
@@ -193,6 +230,26 @@ cat > /etc/cron.d/tcg-pos-cert-renew <<EOF
 17 3 * * * root cd $INSTALL_DIR && docker compose --profile tools run --rm certbot renew --quiet && docker compose exec -T web nginx -s reload
 EOF
 chmod 644 /etc/cron.d/tcg-pos-cert-renew
+
+wait_for_url() {
+    URL=$1
+    LABEL=$2
+    ATTEMPT=1
+    while [ "$ATTEMPT" -le 12 ]; do
+        if curl --fail --silent --show-error --max-time 10 "$URL" >/dev/null; then
+            printf '%s is ready.\n' "$LABEL"
+            return 0
+        fi
+        printf 'Waiting for %s (%s/12)...\n' "$LABEL" "$ATTEMPT"
+        sleep 5
+        ATTEMPT=$((ATTEMPT + 1))
+    done
+    printf '%s did not become ready: %s\n' "$LABEL" "$URL" >&2
+    return 1
+}
+
+wait_for_url "https://$DOMAIN/healthz" 'Web application'
+wait_for_url "https://$DOMAIN/actuator/health/readiness" 'API'
 
 docker compose ps
 printf '\nTCG POS is available at https://%s\n' "$DOMAIN"
