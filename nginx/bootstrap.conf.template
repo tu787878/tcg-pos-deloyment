@@ -14,6 +14,15 @@ server {
         return 200 "ok\n";
     }
 
+    location = /actuator/health/readiness {
+        proxy_pass http://api:8080;
+        access_log off;
+    }
+
+    location /actuator/ {
+        return 403;
+    }
+
     location / {
         root /usr/share/nginx/html;
         try_files $uri $uri/ /index.html;

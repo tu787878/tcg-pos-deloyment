@@ -3,6 +3,8 @@ set -eu
 
 INSTALL_DIR=${TCG_POS_DIR:-/opt/tcg-pos}
 cd "$INSTALL_DIR"
+exec 9>"$INSTALL_DIR/.update.lock"
+flock -n 9 || { printf 'Another POS update is running.\n' >&2; exit 1; }
 
 if [ "$#" -ne 1 ]; then
     printf 'Usage: sudo %s VERSION\n' "$0" >&2

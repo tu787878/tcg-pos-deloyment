@@ -1,100 +1,81 @@
 #!/bin/sh
+# Local Raspberry Pi OS / Debian installation: sudo ./install.sh
 set -eu
 
 INSTALL_DIR=${TCG_POS_DIR:-/opt/tcg-pos}
 SOURCE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-DOMAIN=
-EMAIL=
-VERSION=1.0.0
-API_IMAGE=ghcr.io/tu787878/tcg-pos-api
-WEB_IMAGE=ghcr.io/tu787878/tcg-pos-web
-REGISTRY_USER=shibawannafly
+VERSION=${APP_VERSION:-latest}
+API_IMAGE=${API_IMAGE:-ghcr.io/tu787878/tcg-pos-api}
+WEB_IMAGE=${WEB_IMAGE:-ghcr.io/tu787878/tcg-pos-web}
 
-usage() {
-    cat <<'EOF'
-Usage: sudo ./install.sh \
-  --domain restaurant-one.duckdns.org \
-  --email owner@example.com
-
-Optional overrides:
-  --version VERSION
-  --api-image IMAGE
-  --web-image IMAGE
-  --registry-user GITHUB_USERNAME
-EOF
-}
-
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --domain) DOMAIN=${2:-}; shift 2 ;;
-        --email) EMAIL=${2:-}; shift 2 ;;
-        --version) VERSION=${2:-}; shift 2 ;;
-        --api-image) API_IMAGE=${2:-}; shift 2 ;;
-        --web-image) WEB_IMAGE=${2:-}; shift 2 ;;
-        --registry-user) REGISTRY_USER=${2:-}; shift 2 ;;
-        -h|--help) usage; exit 0 ;;
-        *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
-    esac
-done
+case "${1:-}" in
+    -h|--help)
+        printf 'Usage: sudo ./install.sh\nLocal network installation at http://<pi-hostname>.local; no public domain or router port forwarding.\n'
+        exit 0
+        ;;
+    '') ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; exit 1 ;;
+esac
 
 if [ "$(id -u)" -ne 0 ]; then
     printf 'Run this installer with sudo.\n' >&2
     exit 1
 fi
 
-case "$DOMAIN" in
-    ''|*[!A-Za-z0-9.-]*|.*|*.) printf 'Invalid domain.\n' >&2; exit 1 ;;
-esac
-case "$EMAIL" in
-    *@*.*) ;;
-    *) printf 'Invalid certificate email.\n' >&2; exit 1 ;;
-esac
-case "$VERSION" in
-    ''|*[!A-Za-z0-9._-]*) printf 'Invalid version.\n' >&2; exit 1 ;;
-esac
-case "$API_IMAGE:$WEB_IMAGE" in
-    *[!A-Za-z0-9._/:@-]*) printf 'Invalid image name.\n' >&2; exit 1 ;;
-esac
-case "$REGISTRY_USER" in
-    ''|*[!A-Za-z0-9_-]*) printf 'Invalid registry username.\n' >&2; exit 1 ;;
-esac
-if [ -z "$API_IMAGE" ] || [ -z "$WEB_IMAGE" ]; then
-    usage >&2
-    exit 1
-fi
+# Update system packages and install dependencies; no hardware or network preflight checks.
+# Bullseye security packages have moved to Debian's archive.
+# Handle both traditional sources.list entries and deb822 .sources files.
+repair_bullseye_security() {
+    for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [ -f "$source" ] || continue
+        temporary=$(mktemp)
+        case "$source" in
+            *.sources) record_separator='' ;;
+            *) record_separator='\n' ;;
+        esac
+        awk -v RS="$record_separator" '
+            /bullseye-security/ {
+                gsub(/https?:\/\/(security|deb)\.debian\.org\/debian-security/, "https://archive.debian.org/debian-security")
+            }
+            { print; if (RS == "") print "" }
+        ' "$source" > "$temporary"
+        if ! cmp -s "$source" "$temporary"; then
+            cp -p "$source" "$source.before-tcg-pos-$(date +%s)"
+            cat "$temporary" > "$source"
+            printf 'Updated Bullseye security repository: %s\n' "$source"
+            # Discard indexes referring to the previous mirror.
+            rm -rf /var/lib/apt/lists/*
+        fi
+        rm -f "$temporary"
+    done
+}
 
-ARCH=$(uname -m)
-case "$ARCH" in
-    x86_64|aarch64|arm64) ;;
-    *) printf 'Unsupported CPU architecture: %s\n' "$ARCH" >&2; exit 1 ;;
-esac
+repair_bullseye_security
 
-if [ -r /etc/os-release ]; then
-    # shellcheck source=/dev/null
-    . /etc/os-release
-else
-    printf 'Cannot identify the operating system.\n' >&2
-    exit 1
-fi
-case "${ID:-}" in
-    ubuntu|debian|raspbian) ;;
-    *) printf 'Supported systems are Debian, Ubuntu, and Raspberry Pi OS 64-bit.\n' >&2; exit 1 ;;
-esac
+refresh_packages() {
+    apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update
+}
 
-MEMORY_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
-if [ "${MEMORY_KB:-0}" -lt 3500000 ]; then
-    printf 'At least 4 GB RAM is required (detected %s kB).\n' "${MEMORY_KB:-unknown}" >&2
-    exit 1
-fi
-AVAILABLE_KB=$(df -Pk /opt 2>/dev/null | awk 'NR==2 {print $4}')
-if [ -n "${AVAILABLE_KB:-}" ] && [ "$AVAILABLE_KB" -lt 10485760 ]; then
-    printf 'At least 10 GB free space is required under /opt.\n' >&2
-    exit 1
-fi
+install_packages() {
+    if apt-get -o Acquire::Retries=3 install -y "$@"; then
+        return 0
+    fi
+    printf 'Refreshing stale APT package lists and retrying once...\n'
+    # These are downloaded indexes only; installed packages and sources stay intact.
+    rm -rf /var/lib/apt/lists/*
+    refresh_packages
+    apt-get -o Acquire::Retries=3 install -y "$@"
+}
+
+refresh_packages
+printf 'Upgrading installed system packages...\n'
+apt-get -o Acquire::Retries=3 upgrade -y
+install_packages ca-certificates curl openssl avahi-daemon util-linux coreutils
+systemctl enable --now avahi-daemon
+LOCAL_DOMAIN=$(hostname -s).local
+. /etc/os-release
 
 install_docker() {
-    apt-get update
-    apt-get install -y ca-certificates curl gnupg openssl
     install -m 0755 -d /etc/apt/keyrings
     DOCKER_DISTRO=$ID
     [ "$DOCKER_DISTRO" = raspbian ] && DOCKER_DISTRO=debian
@@ -105,8 +86,8 @@ install_docker() {
     [ -n "$CODENAME" ] || { printf 'Operating-system codename is unavailable.\n' >&2; exit 1; }
     printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' \
         "$ARCHITECTURE" "$DOCKER_DISTRO" "$CODENAME" > /etc/apt/sources.list.d/docker.list
-    apt-get update
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    refresh_packages
+    install_packages docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     systemctl enable --now docker
 }
 
@@ -114,45 +95,17 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
     install_docker
 fi
 docker compose version >/dev/null
-if ! command -v openssl >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-    apt-get update
-    apt-get install -y ca-certificates curl openssl
-fi
 
-PUBLIC_IP=$(curl -fsS --max-time 15 https://api.ipify.org) || {
-    printf 'Could not determine the server public IPv4 address.\n' >&2
-    exit 1
-}
-DOMAIN_IPS=$(getent ahostsv4 "$DOMAIN" | awk '{print $1}' | sort -u)
-if ! printf '%s\n' "$DOMAIN_IPS" | grep -Fx "$PUBLIC_IP" >/dev/null 2>&1; then
-    printf 'Domain %s does not resolve to this server (%s).\n' "$DOMAIN" "$PUBLIC_IP" >&2
-    printf 'Resolved IPv4 addresses: %s\n' "${DOMAIN_IPS:-none}" >&2
-    exit 1
-fi
-
-printf 'GHCR token for %s: ' "$REGISTRY_USER"
-trap 'stty echo </dev/tty' EXIT INT TERM
-stty -echo </dev/tty
-IFS= read -r GHCR_TOKEN </dev/tty
-stty echo </dev/tty
-trap - EXIT INT TERM
-printf '\n'
-if [ -z "$GHCR_TOKEN" ]; then
-    printf 'A GHCR token with read:packages access is required.\n' >&2
-    exit 1
-fi
-printf '%s' "$GHCR_TOKEN" | docker login ghcr.io \
-    --username "$REGISTRY_USER" --password-stdin
-unset GHCR_TOKEN
+systemctl enable --now docker
 
 mkdir -p "$INSTALL_DIR/nginx" "$INSTALL_DIR/secrets" "$INSTALL_DIR/backups"
 chmod 700 "$INSTALL_DIR" "$INSTALL_DIR/secrets" "$INSTALL_DIR/backups"
-install -m 0644 "$SOURCE_DIR/compose.yaml" "$INSTALL_DIR/compose.yaml"
-install -m 0755 "$SOURCE_DIR/update.sh" "$INSTALL_DIR/update.sh"
-install -m 0755 "$SOURCE_DIR/backup.sh" "$INSTALL_DIR/backup.sh"
-install -m 0755 "$SOURCE_DIR/restore.sh" "$INSTALL_DIR/restore.sh"
-install -m 0644 "$SOURCE_DIR/nginx/bootstrap.conf.template" "$INSTALL_DIR/nginx/bootstrap.conf.template"
-install -m 0644 "$SOURCE_DIR/nginx/https.conf.template" "$INSTALL_DIR/nginx/https.conf.template"
+if [ "$SOURCE_DIR" != "$INSTALL_DIR" ]; then
+    install -m 0644 "$SOURCE_DIR/compose.yaml" "$INSTALL_DIR/compose.yaml"
+    for script in update.sh backup.sh restore.sh boot-update.sh; do
+        install -m 0755 "$SOURCE_DIR/$script" "$INSTALL_DIR/$script"
+    done
+fi
 
 ENV_FILE=$INSTALL_DIR/.env
 if [ ! -f "$ENV_FILE" ]; then
@@ -162,11 +115,9 @@ APP_VERSION=$VERSION
 API_IMAGE=$API_IMAGE
 WEB_IMAGE=$WEB_IMAGE
 POSTGRES_IMAGE=postgres:17-alpine
-CERTBOT_IMAGE=certbot/certbot:v5.1.0
-DOMAIN=$DOMAIN
-PUBLIC_URL=https://$DOMAIN
-CORS_ALLOWED_ORIGINS=https://$DOMAIN
-LETSENCRYPT_EMAIL=$EMAIL
+DOMAIN=$LOCAL_DOMAIN
+PUBLIC_URL=http://$LOCAL_DOMAIN
+CORS_ALLOWED_ORIGINS=http://$LOCAL_DOMAIN,http://localhost
 POSTGRES_DB=simple_pos
 POSTGRES_USER=simple_pos
 POSTGRES_PASSWORD=$DB_PASSWORD
@@ -189,67 +140,82 @@ GENERAL_RATE_LIMIT_REQUESTS=600
 GENERAL_RATE_LIMIT_WINDOW=PT1M
 EOF
     chmod 600 "$ENV_FILE"
-else
-    INSTALLED_DOMAIN=$(sed -n 's/^DOMAIN=//p' "$ENV_FILE")
-    if [ "$INSTALLED_DOMAIN" != "$DOMAIN" ]; then
-        printf 'This installation is already configured for %s, not %s.\n' "$INSTALLED_DOMAIN" "$DOMAIN" >&2
-        exit 1
-    fi
 fi
 
 PRIVATE_KEY=$INSTALL_DIR/secrets/simple-pos-jwt-private.pem
 PUBLIC_KEY=$INSTALL_DIR/secrets/simple-pos-jwt-public.pem
-if [ ! -f "$PRIVATE_KEY" ] || [ ! -f "$PUBLIC_KEY" ]; then
+if [ ! -f "$PRIVATE_KEY" ]; then
     openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$PRIVATE_KEY"
-    openssl pkey -in "$PRIVATE_KEY" -pubout -out "$PUBLIC_KEY"
     chmod 600 "$PRIVATE_KEY"
-    chmod 644 "$PUBLIC_KEY"
 fi
+openssl pkey -in "$PRIVATE_KEY" -pubout -out "$PUBLIC_KEY"
+chmod 644 "$PUBLIC_KEY"
 
-render_nginx() {
-    sed "s/__DOMAIN__/$DOMAIN/g" "$1" > "$INSTALL_DIR/nginx/default.conf"
-    chmod 644 "$INSTALL_DIR/nginx/default.conf"
+cat > "$INSTALL_DIR/nginx/default.conf" <<'NGINX'
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;
+    server_tokens off;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location = /actuator/health/readiness {
+        proxy_pass http://api:8080;
+        access_log off;
+    }
+
+    location /actuator/ {
+        return 403;
+    }
+
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://api:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 }
+
+NGINX
+chmod 644 "$INSTALL_DIR/nginx/default.conf"
 
 cd "$INSTALL_DIR"
-render_nginx "$INSTALL_DIR/nginx/bootstrap.conf.template"
-docker compose config --quiet
-docker compose pull
+docker compose pull postgres api web
 docker compose up -d postgres api web
 
-docker compose --profile tools run --rm certbot certonly \
-    --webroot --webroot-path /var/www/certbot \
-    --domain "$DOMAIN" --email "$EMAIL" \
-    --agree-tos --no-eff-email --non-interactive
+cat > /etc/systemd/system/tcg-pos-update.service <<EOF
+[Unit]
+Description=Check for TCG POS application updates at boot
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
 
-render_nginx "$INSTALL_DIR/nginx/https.conf.template"
-docker compose exec -T web nginx -t
-docker compose exec -T web nginx -s reload
+[Service]
+Type=oneshot
+Environment="TCG_POS_DIR=$INSTALL_DIR"
+ExecStart=/bin/sh "$INSTALL_DIR/boot-update.sh"
+TimeoutStartSec=10min
 
-cat > /etc/cron.d/tcg-pos-cert-renew <<EOF
-17 3 * * * root cd $INSTALL_DIR && docker compose --profile tools run --rm certbot renew --quiet && docker compose exec -T web nginx -s reload
+[Install]
+WantedBy=multi-user.target
 EOF
-chmod 644 /etc/cron.d/tcg-pos-cert-renew
-
-wait_for_url() {
-    URL=$1
-    LABEL=$2
-    ATTEMPT=1
-    while [ "$ATTEMPT" -le 12 ]; do
-        if curl --fail --silent --show-error --max-time 10 "$URL" >/dev/null; then
-            printf '%s is ready.\n' "$LABEL"
-            return 0
-        fi
-        printf 'Waiting for %s (%s/12)...\n' "$LABEL" "$ATTEMPT"
-        sleep 5
-        ATTEMPT=$((ATTEMPT + 1))
-    done
-    printf '%s did not become ready: %s\n' "$LABEL" "$URL" >&2
-    return 1
-}
-
-wait_for_url "https://$DOMAIN/healthz" 'Web application'
-wait_for_url "https://$DOMAIN/actuator/health/readiness" 'API'
-
-docker compose ps
-printf '\nTCG POS is available at https://%s\n' "$DOMAIN"
+systemctl daemon-reload
+systemctl enable tcg-pos-update.service
+printf '\nTCG POS started. Open http://localhost on the Raspberry Pi.\n'
+printf 'On the same local network, open http://%s (no www prefix).\n' "$LOCAL_DOMAIN"
+printf 'From another device, open http://<raspberry-pi-ip>.\n'
