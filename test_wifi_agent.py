@@ -17,6 +17,19 @@ with patch.dict(sys.modules, {'jwt': fake_jwt}), patch.object(Path, 'read_text',
 
 
 class AgentTests(unittest.TestCase):
+    def test_connected_status_includes_actual_ssid(self):
+        with patch.object(agent, 'nm', side_effect=['100 (connected)', '192.168.0.50/24', 'active-uuid', 'Shop Wi-Fi']), patch.object(agent.os, 'uname', return_value=types.SimpleNamespace(nodename='pi'), create=True):
+            result = agent.status()
+        self.assertEqual(result['ssid'], 'Shop Wi-Fi')
+        self.assertEqual(result['addresses'], ['192.168.0.50'])
+
+    def test_disconnected_status_has_no_ssid(self):
+        with patch.object(agent, 'nm', side_effect=['30 (disconnected)', '', '--']) as nm, patch.object(agent.os, 'uname', return_value=types.SimpleNamespace(nodename='pi'), create=True):
+            result = agent.status()
+        self.assertIsNone(result['ssid'])
+        self.assertEqual(result['addresses'], [])
+        self.assertEqual(nm.call_count, 3)
+
     def test_invalid_credentials_do_not_run_commands(self):
         with patch.object(agent, 'nm') as nm:
             for ssid, password in [('', 'password'), ('x' * 33, 'password'), ('Shop', 'short'), ('Shop', 'password\nsecret')]:

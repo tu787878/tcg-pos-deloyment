@@ -26,8 +26,12 @@ def nm(*args, timeout=20):
 def status():
     state = nm('-g', 'GENERAL.STATE', 'device', 'show', INTERFACE)
     addresses = nm('-g', 'IP4.ADDRESS', 'device', 'show', INTERFACE).splitlines()
+    connection = nm('-g', 'GENERAL.CON-UUID', 'device', 'show', INTERFACE)
+    ssid = None
+    if state.startswith('100') and connection and connection != '--':
+        ssid = nm('-g', '802-11-wireless.ssid', 'connection', 'show', 'uuid', connection)
     return {'state': state, 'addresses': [x.split('/')[0] for x in addresses if x],
-            'hostname': os.uname().nodename + '.local'}
+            'ssid': ssid, 'hostname': os.uname().nodename + '.local'}
 
 
 def connect(ssid, password):
