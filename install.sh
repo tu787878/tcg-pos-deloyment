@@ -76,7 +76,7 @@ install_packages() {
 refresh_packages
 printf 'Upgrading installed system packages...\n'
 apt-get -o Acquire::Retries=3 upgrade -y
-install_packages ca-certificates curl openssl avahi-daemon util-linux coreutils
+install_packages ca-certificates curl openssl avahi-daemon util-linux coreutils python3 python3-jwt python3-cryptography network-manager
 systemctl enable --now avahi-daemon
 LOCAL_DOMAIN=$(hostname -s).local
 . /etc/os-release
@@ -111,6 +111,7 @@ if [ "$SOURCE_DIR" != "$INSTALL_DIR" ]; then
     for script in update.sh backup.sh restore.sh boot-update.sh; do
         install -m 0755 "$SOURCE_DIR/$script" "$INSTALL_DIR/$script"
     done
+    install -m 0600 "$SOURCE_DIR/wifi-agent.py" "$INSTALL_DIR/wifi-agent.py"
 fi
 
 ENV_FILE=$INSTALL_DIR/.env
@@ -166,6 +167,32 @@ fi
 openssl pkey -in "$PRIVATE_KEY" -pubout -out "$PUBLIC_KEY"
 chmod 644 "$PUBLIC_KEY"
 
+cat > /etc/systemd/system/tcg-pos-wifi.service <<EOF
+[Unit]
+Description=TCG POS Wi-Fi setup agent
+After=NetworkManager.service
+Requires=NetworkManager.service
+
+[Service]
+ExecStart=/usr/bin/python3 $INSTALL_DIR/wifi-agent.py
+EnvironmentFile=$INSTALL_DIR/.env
+Environment=TCG_POS_DIR=$INSTALL_DIR
+RuntimeDirectory=tcg-pos-wifi
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+UMask=0077
+Restart=on-failure
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now tcg-pos-wifi.service
+systemctl restart tcg-pos-wifi.service
+
 cat > "$INSTALL_DIR/nginx/default.conf" <<'NGINX'
 server {
     listen 80;
@@ -190,6 +217,12 @@ server {
 
     location /actuator/ {
         return 403;
+    }
+
+    location /device/wifi/ {
+        proxy_pass http://unix:/run/tcg-pos-wifi/control.sock:/device/wifi/;
+        proxy_read_timeout 100s;
+        client_max_body_size 4k;
     }
 
     location / {

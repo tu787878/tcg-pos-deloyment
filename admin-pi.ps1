@@ -9,7 +9,7 @@ param(
     [ValidatePattern('^[a-z_][a-z0-9_-]*$')]
     [string]$User,
 
-    [ValidateSet('SetupKey', 'Install', 'Status', 'Logs', 'Update', 'Backup', 'RegistryLogin', 'Shell')]
+    [ValidateSet('SetupKey', 'Install', 'Status', 'Logs', 'Update', 'Backup', 'RegistryLogin', 'Shell', 'ConnectSetup', 'ConnectStatus')]
     [string]$Action = 'Status',
 
     [ValidateRange(1, 65535)]
@@ -123,6 +123,15 @@ function Invoke-PiCommand {
 }
 
 switch ($Action) {
+    'ConnectSetup' {
+        $connectScript = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'setup-pi-connect.sh')).Replace("`r`n", "`n")
+        $connectPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($connectScript))
+        Write-Host 'Setting up Raspberry Pi Connect. Complete account linking at the verification URL shown by the Pi.'
+        Invoke-PiCommand "printf %s $connectPayload | base64 -d | sh"
+    }
+    'ConnectStatus' {
+        Invoke-PiCommand 'rpi-connect status'
+    }
     'SetupKey' { Write-Host 'Key setup complete; no application changes requested.' }
     'Install' {
         Get-Command scp, tar -ErrorAction Stop | Out-Null
@@ -132,7 +141,7 @@ switch ($Action) {
         try {
             # Only deployment inputs are uploaded: no Git metadata, .env, keys, or backups.
             $files = @('compose.yaml', 'install.sh', 'update.sh', 'backup.sh',
-                'restore.sh', 'boot-update.sh')
+                'restore.sh', 'boot-update.sh', 'wifi-agent.py')
             $utf8 = New-Object System.Text.UTF8Encoding($false)
             foreach ($file in $files) {
                 $sourcePath = Join-Path $PSScriptRoot $file

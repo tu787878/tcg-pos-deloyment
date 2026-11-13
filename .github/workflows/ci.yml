@@ -26,11 +26,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes shellcheck
-          shellcheck install.sh install-production.sh boot-update.sh test-boot-update.sh update.sh backup.sh restore.sh
-          for script in install.sh install-production.sh boot-update.sh test-boot-update.sh update.sh backup.sh restore.sh; do sh -n "$script"; done
+          shellcheck install.sh install-production.sh boot-update.sh test-boot-update.sh update.sh backup.sh restore.sh setup-pi-connect.sh
+          for script in install.sh install-production.sh boot-update.sh test-boot-update.sh update.sh backup.sh restore.sh setup-pi-connect.sh; do sh -n "$script"; done
 
       - name: Verify boot update decisions
         run: sh test-boot-update.sh
+
+      - name: Verify Wi-Fi agent
+        run: python3 -m unittest test_wifi_agent.py
 
       - name: Render test configuration
         run: |

@@ -122,7 +122,33 @@ Invoke-RestMethod http://192.168.0.97/api/v1/system/info
 
 Expected: `UP`, then `simple-pos-backend` / `v1`.
 
-## Status
+## Enable customer Wi-Fi setup in the website
+
+Customers use their existing POS ADMIN login to configure Wi-Fi from the user menu. No separate setup code or extra login is required. Any shop ADMIN account issued by this Pi can manage its Wi-Fi.
+
+Publish the updated web image, then refresh the Pi installation from Windows (preserves data):
+
+```powershell
+.\admin-pi.ps1 -PiHost 192.168.0.97 -User pi -Action Install
+```
+
+The local installer installs the host Wi-Fi agent and connects it to Nginx through a Unix socket. Requires Raspberry Pi OS with NetworkManager managing `wlan0`. Set the correct WLAN country using `sudo raspi-config` before delivery. The page supports WPA/WPA2 personal networks with 8–63 character passwords, including manually entered hidden SSIDs; enterprise, captive portals and open networks are not supported.
+
+Customer steps: connect LAN, open `http://pi.local`, sign in as a shop ADMIN, open the user menu → **Raspberry Pi Wi-Fi**, scan/select the network, enter its password, and connect. Wait for a Wi-Fi IPv4 address, test that address in another browser tab, then unplug LAN and reopen `http://pi.local`. Keep the computer/tablet on the same shop network; reconnect LAN if needed. Ethernet is never disabled. Saved Wi-Fi reconnects on boot. Failed connection attempts remove the new profile and try to restore the previous Wi-Fi connection.
+
+The password is submitted through the Pi website's current HTTP/HTTPS connection: use the trusted shop LAN. It is saved in NetworkManager's root-only profile, not the POS database or application logs. Only signed, unexpired ADMIN access tokens are accepted. Wi-Fi access is local to the Pi website; choosing a different API server does not redirect host configuration requests.
+
+Troubleshoot on the Pi:
+
+```bash
+sudo systemctl status tcg-pos-wifi.service
+sudo journalctl -u tcg-pos-wifi.service -n 50 --no-pager
+nmcli device status
+```
+
+Host tests are mocked. Test the real Wi-Fi handoff and reboot on the Pi before customer delivery. Local installation supports this feature; the optional public HTTPS installer does not configure the agent/proxy.
+
+## Status commands
 
 ```powershell
 .\admin-pi.ps1 -PiHost 192.168.0.97 -User pi -Action Status
@@ -167,7 +193,36 @@ sudo reboot
 sudo poweroff
 ```
 
-## Optional connection settings
+## Raspberry Pi Connect — remote support from a browser
+
+Run on Windows while SSH can reach the Pi:
+
+```powershell
+.\admin-pi.ps1 -PiHost 192.168.0.97 -User pi -Action ConnectSetup
+```
+
+Open the verification link printed in the terminal. Sign in with the Raspberry Pi account that should manage this device and finish linking it. Keep the terminal open until it completes.
+
+Then open [Raspberry Pi Connect](https://connect.raspberrypi.com), select the Pi, and start **Remote shell**.
+
+```powershell
+# Check linking/service status from Windows:
+.\admin-pi.ps1 -PiHost 192.168.0.97 -User pi -Action ConnectStatus
+```
+
+Setup installs Connect Lite for terminal access, preserves an existing full Connect installation, and enables user lingering so access survives logout/reboot. Requires Raspberry Pi OS Bookworm or later and internet access. Test remote shell again after a reboot. No router port forwarding is needed. The POS remains local; this does not expose `pi.local` publicly or make the Windows SSH command work across the internet.
+
+Inside a Pi terminal:
+
+```bash
+rpi-connect doctor
+# Unlink this user from the account:
+rpi-connect signout
+```
+
+For desktop sharing, use the full client with a compatible graphical session. See the [official setup and requirements](https://www.raspberrypi.com/documentation/services/connect.html).
+
+## Optional SSH connection settings
 
 ```powershell
 # Existing private key:

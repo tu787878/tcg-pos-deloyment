@@ -60,6 +60,20 @@ http://192.168.1.50
 
 This IP address is only an example. Your actual address may differ and can change. The `.local` name is preferable when supported by your network and devices.
 
+## Set up shop Wi-Fi using the POS website
+
+If your installer enabled this feature:
+
+1. Keep the Pi connected to the router by LAN cable.
+2. Open `http://pi.local` and sign in with a POS admin account.
+3. Open the user menu and choose **Raspberry Pi Wi-Fi**.
+4. Select **Scan networks**, choose your shop Wi-Fi, and enter its password.
+5. Select **Connect and save Wi-Fi**. Keep the cable connected while it works.
+6. Wait for the Wi-Fi IP address, then open that address in another tab to test access.
+7. Remove the LAN cable and open `http://pi.local` again. If it fails, reconnect LAN and ask support.
+
+Wi-Fi is saved for future starts. Your computer/tablet must use the same shop network. Password-based WPA/WPA2 personal Wi-Fi is supported; networks requiring a web sign-in or enterprise account need your installer. If the menu is missing or setup is unavailable, ask your installer to update the Pi first.
+
 ## 3. Connect through SSH — when needed
 
 SSH lets you type commands on the Pi from your computer.
