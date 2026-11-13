@@ -1,5 +1,9 @@
 # TCG POS — Raspberry Pi deployment
 
+To install and manage the Pi from your Windows computer over SSH, see [ADMIN-SSH.md](ADMIN-SSH.md) and `admin-pi.ps1`.
+
+For customers receiving a preinstalled Pi, including first connection, optional SSH access, daily use, and support, see [CUSTOMER-README.md](CUSTOMER-README.md).
+
 Run the POS on a Raspberry Pi and use it from devices on the same Wi-Fi or wired network. The Pi runs the web app, API, and PostgreSQL with Docker Compose.
 
 **Local address:** `http://<pi-hostname>.local`, for example `http://raspi.local`.

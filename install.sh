@@ -4,7 +4,13 @@ set -eu
 
 INSTALL_DIR=${TCG_POS_DIR:-/opt/tcg-pos}
 SOURCE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-VERSION=${APP_VERSION:-latest}
+APP_RELEASE=${APP_VERSION:-latest}
+case "$APP_RELEASE" in
+    ''|*[!A-Za-z0-9._-]*|-*|.*)
+        printf 'Invalid application image tag: %s\n' "$APP_RELEASE" >&2
+        exit 1
+        ;;
+esac
 API_IMAGE=${API_IMAGE:-ghcr.io/tu787878/tcg-pos-api}
 WEB_IMAGE=${WEB_IMAGE:-ghcr.io/tu787878/tcg-pos-web}
 
@@ -111,7 +117,7 @@ ENV_FILE=$INSTALL_DIR/.env
 if [ ! -f "$ENV_FILE" ]; then
     DB_PASSWORD=$(openssl rand -hex 32)
     cat > "$ENV_FILE" <<EOF
-APP_VERSION=$VERSION
+APP_VERSION=$APP_RELEASE
 API_IMAGE=$API_IMAGE
 WEB_IMAGE=$WEB_IMAGE
 POSTGRES_IMAGE=postgres:17-alpine
@@ -140,6 +146,15 @@ GENERAL_RATE_LIMIT_REQUESTS=600
 GENERAL_RATE_LIMIT_WINDOW=PT1M
 EOF
     chmod 600 "$ENV_FILE"
+else
+    # Repair installations made when /etc/os-release overwrote the image tag.
+    INSTALLED_RELEASE=$(sed -n 's/^APP_VERSION=//p' "$ENV_FILE")
+    if [ -n "${VERSION:-}" ] && [ "$INSTALLED_RELEASE" = "$VERSION" ] &&
+        printf '%s' "$INSTALLED_RELEASE" | grep -q '[^A-Za-z0-9._-]'; then
+        cp -p "$ENV_FILE" "$ENV_FILE.before-image-tag-fix-$(date +%s)"
+        sed -i "s/^APP_VERSION=.*/APP_VERSION=$APP_RELEASE/" "$ENV_FILE"
+        printf 'Repaired OS version used as image tag; now using %s.\n' "$APP_RELEASE"
+    fi
 fi
 
 PRIVATE_KEY=$INSTALL_DIR/secrets/simple-pos-jwt-private.pem
@@ -196,7 +211,13 @@ chmod 644 "$INSTALL_DIR/nginx/default.conf"
 
 cd "$INSTALL_DIR"
 docker compose pull postgres api web
-docker compose up -d postgres api web
+if [ "${TCG_POS_DATABASE_ONLY:-0}" = 1 ]; then
+    systemctl disable --now tcg-pos-update.service 2>/dev/null || true
+    docker compose stop api web
+    docker compose up -d --wait --wait-timeout 90 postgres
+else
+    docker compose up -d postgres api web
+fi
 
 cat > /etc/systemd/system/tcg-pos-update.service <<EOF
 [Unit]
@@ -215,7 +236,12 @@ TimeoutStartSec=10min
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable tcg-pos-update.service
+if [ "${TCG_POS_DATABASE_ONLY:-0}" != 1 ]; then
+    systemctl enable tcg-pos-update.service
+else
+    printf '\nDatabase ready for import; application startup and boot updates are deferred.\n'
+    exit 0
+fi
 printf '\nTCG POS started. Open http://localhost on the Raspberry Pi.\n'
 printf 'On the same local network, open http://%s (no www prefix).\n' "$LOCAL_DOMAIN"
 printf 'From another device, open http://<raspberry-pi-ip>.\n'

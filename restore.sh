@@ -14,6 +14,10 @@ printf 'Set CONFIRM_RESTORE=YES after verifying the target and backup.\n'
 [ "${CONFIRM_RESTORE:-}" = YES ] || exit 1
 
 cd "$INSTALL_DIR"
+exec 9>"$INSTALL_DIR/.update.lock"
+flock -n 9 || { printf 'Another POS update or restore is running.\n' >&2; exit 1; }
+# Validate dump compatibility before dropping the existing database.
+docker compose exec -T postgres pg_restore --list < "$BACKUP_PATH/database.dump" >/dev/null
 docker compose stop api web
 docker compose exec -T postgres dropdb \
     -U "$(sed -n 's/^POSTGRES_USER=//p' .env)" --if-exists "$(sed -n 's/^POSTGRES_DB=//p' .env)"
