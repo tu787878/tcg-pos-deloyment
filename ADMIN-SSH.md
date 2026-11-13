@@ -53,6 +53,51 @@ If an image says `not found`, publish both API and web `latest` images through t
 
 ## 4. OR import an old POS backup
 
+### A. Create the backup — run on the Ubuntu VPS
+
+These commands use the existing database container `tcg-pos-api-postgres-1`.
+Pause use of the old POS before taking the final migration backup so new sales are not missed.
+
+```bash
+mkdir -p ~/pos-backup
+chmod 700 ~/pos-backup
+
+docker exec tcg-pos-api-postgres-1 sh -c \
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --no-owner --no-privileges' \
+  > ~/pos-backup/database.dump
+```
+
+Continue only if the dump finishes without errors. Check that PostgreSQL can read the archive:
+
+```bash
+docker exec -i tcg-pos-api-postgres-1 pg_restore --list \
+  < ~/pos-backup/database.dump > ~/pos-backup/contents.txt
+```
+
+Continue only if that command also succeeds. If Docker requires administrator access on your VPS, use `sudo docker` instead of `docker`.
+
+### B. Download the backup — run in Windows PowerShell
+
+Open a separate terminal on your Windows computer. Do not run these commands in the Ubuntu SSH session.
+Replace `YOUR_VPS_IP` with the VPS public IP address; enter the VPS SSH password or use your configured SSH key.
+
+```powershell
+New-Item -ItemType Directory -Force C:\Backups\old-pos
+
+scp ubuntu@YOUR_VPS_IP:~/pos-backup/database.dump C:\Backups\old-pos\
+if ($LASTEXITCODE -ne 0) { throw 'Backup download failed. Do not import.' }
+
+Get-Item C:\Backups\old-pos\database.dump
+```
+
+This is a database-only backup. Uploaded images/files are stored separately; ask support to migrate them too. Keep the backup private.
+
+### C. Install and import — run in Windows PowerShell
+
+```powershell
+cd C:\Users\vantu\Desktop\shared\tcg-pos-deloyment
+```
+
 This **replaces the target database**, not a merge. The target is backed up first.
 Use a compatible TCG POS PostgreSQL custom-format dump, not plain SQL or MySQL.
 
